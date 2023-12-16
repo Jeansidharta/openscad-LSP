@@ -33,7 +33,7 @@ impl Param {
                     child.child_by_field_name("right").map(|right| Param {
                         name: node_text(code, &left).to_owned(),
                         default: Some(node_text(code, &right).to_owned()),
-                        range: right.lsp_range(),
+                        range: left.lsp_range(),
                     })
                 }),
                 "special_variable" => None,

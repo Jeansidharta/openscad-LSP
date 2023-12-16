@@ -43,7 +43,7 @@ impl Server {
         file.borrow_mut().gen_top_level_items_if_needed();
         let bfile = file.borrow();
 
-        let (ident_initial_name, parent_scope, ident_initial_node) = {
+        let (ident_initial_name, parent_scope) = {
             let node = get_node_at_point(&bfile, to_point(params.text_document_position.position));
             if node.kind() != "identifier" {
                 self.respond(Response {
@@ -113,38 +113,44 @@ impl Server {
                 &bfile,
                 to_point(identifier_definition[0].borrow().range.start),
             );
-            // unwrap here is fine because an identifier node should always have a parent scope
-            let parent_scope = find_node_scope(definition_node).unwrap();
 
-            (ident_initial_name, parent_scope, definition_node)
+            // unwrap here is fine because an identifier node should always have a parent scope
+            let mut parent_scope = definition_node.scope().unwrap();
+
+            // If this is a module_declaration, the module will detect itself as
+            // its scope. So we need to check for that and get its scope's scope.
+            if definition_node.is_parent_kind("module_declaration") {
+                // unwrap here is fine because a module_declaration node should always have a parent scope
+                parent_scope = parent_scope.scope().unwrap();
+            }
+
+            (ident_initial_name, parent_scope)
         };
 
         let mut node_iter = traverse(parent_scope.walk(), Order::Post);
         let mut changes = vec![];
         while let Some(node) = node_iter.next() {
-            let is_identifier_instance =
-                node.kind() != "identifier" || node_text(&bfile.code, &node) != ident_initial_name;
-            if is_identifier_instance {
+            if node.kind() != "identifier" || node_text(&bfile.code, &node) != ident_initial_name {
                 continue;
             }
+            let is_assignment = node.is_parent_kind("assignment");
+            // This takes advantage that a scope should only have a single definition for a
+            // variable.
+            let is_original_assignment = node.scope().is_some_and(|scope| scope == parent_scope);
 
-            let is_assignment = node
-                .parent()
-                .is_some_and(|node| node.kind() == "assignment");
-            let is_assignment_in_subscope = is_assignment && node != ident_initial_node;
-            if is_assignment_in_subscope {
-                // Unwrap is ok because an identifier node whould always have a parent scope.
-                let scope = find_node_scope(node).unwrap();
+            if is_assignment && !is_original_assignment {
+                // Unwrap is ok because an identifier node should always have a scope.
+                let target_scope = node.scope().unwrap();
                 // Consume iterator until it reaches the parent scope
-                while node_iter.next().is_some_and(|next| scope != next) {}
+                node_iter
+                    .by_ref()
+                    .take_while(|node| node != &target_scope)
+                    .count();
                 continue;
             }
 
             changes.push(TextEdit {
-                range: Range {
-                    start: to_position(node.start_position()),
-                    end: to_position(node.end_position()),
-                },
+                range: node.lsp_range(),
                 new_text: ident_new_name.to_string(),
             });
         }
