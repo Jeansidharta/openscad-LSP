@@ -1,3 +1,5 @@
+use std::iter::successors;
+
 use lsp_server::{ExtractError, Request, RequestId};
 use lsp_types::Position;
 use lsp_types::Range;
@@ -28,37 +30,6 @@ pub(crate) fn find_offset(text: &str, pos: Position) -> Option<usize> {
         offset += chars.next()?.len_utf8();
     }
     Some(offset)
-}
-
-// Find the closest parent scope to the given node.
-pub(crate) fn find_node_scope(node: Node) -> Option<Node> {
-    let mut parent_scope = node;
-    while let Some(parent_node) = parent_scope.parent() {
-        parent_scope = parent_node;
-        if matches!(
-            parent_node.kind(),
-            "source_file" | "module_declaration" | "union_block"
-        ) {
-            // If this is a module_declaration, the module will detect itself as
-            // its scope. So we need to check for that and get its scope's scope.
-            return if node
-                .parent()
-                .is_some_and(|parent| parent.kind() == "module_declaration")
-            {
-                find_node_scope(parent_scope)
-            } else {
-                Some(parent_node)
-            };
-        }
-    }
-    None
-}
-
-pub(crate) fn to_position(p: Point) -> Position {
-    Position {
-        line: p.row as u32,
-        character: p.column as u32,
-    }
 }
 
 pub(crate) fn to_point(p: Position) -> Point {
@@ -123,9 +94,37 @@ where
 
 pub(crate) trait NodeExt {
     fn lsp_range(&self) -> Range;
+
+    fn scope(self) -> Option<Self>
+    where
+        Self: Sized;
+
+    fn grandparent(&self) -> Option<Self>
+    where
+        Self: Sized;
+
+    fn is_parent_kind(&self, kind: &str) -> bool;
 }
 
-impl NodeExt for Node<'_> {
+impl<'a> NodeExt for Node<'a> {
+    /// Get the closes possible scope node
+    fn scope(self) -> Option<Self> {
+        successors(self.parent(), |p| p.parent()).find(|parent| {
+            matches!(
+                parent.kind(),
+                "source_file" | "module_declaration" | "union_block"
+            )
+        })
+    }
+
+    fn grandparent(&self) -> Option<Node<'a>> {
+        self.parent().and_then(|p| p.parent())
+    }
+
+    fn is_parent_kind(&self, kind: &str) -> bool {
+        self.parent().is_some_and(|p| p.kind() == kind)
+    }
+
     fn lsp_range(&self) -> Range {
         let r = self.range();
         Range {
